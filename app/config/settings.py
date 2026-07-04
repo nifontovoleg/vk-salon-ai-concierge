@@ -1,0 +1,88 @@
+"""Application configuration."""
+
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+
+class Settings(BaseSettings):
+    """Centralized application settings loaded from environment."""
+
+    model_config = SettingsConfigDict(
+        env_file=BASE_DIR / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    vk_group_token: str = Field(..., description="VK community access token")
+    vk_group_id: int = Field(..., description="VK community numeric ID")
+
+    openrouter_api_key: str = Field(..., description="OpenRouter API key")
+    openrouter_model: str = Field(
+        default="openai/gpt-4o-mini",
+        description="LLM model identifier on OpenRouter",
+    )
+    openrouter_base_url: str = Field(
+        default="https://openrouter.ai/api/v1",
+        description="OpenRouter API base URL",
+    )
+
+    database_url: str = Field(
+        default=f"sqlite+aiosqlite:///{BASE_DIR / 'data' / 'salon.db'}",
+        description="Async SQLAlchemy database URL",
+    )
+
+    log_level: str = Field(default="INFO")
+    salon_name: str = Field(default="Салон красоты")
+    salon_address: str = Field(default="")
+    salon_phone: str = Field(default="")
+    salon_working_hours: str = Field(default="")
+
+    seed_admin_vk_ids: str = Field(
+        default="",
+        description="Comma-separated VK user IDs for initial admins",
+    )
+
+    dialog_history_limit: int = Field(default=20, ge=1, le=100)
+    openrouter_timeout: float = Field(default=60.0, ge=5.0)
+    openrouter_max_tokens: int = Field(default=1024, ge=128)
+
+    @field_validator("vk_group_token", "openrouter_api_key")
+    @classmethod
+    def strip_secrets(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("database_url")
+    @classmethod
+    def normalize_database_url(cls, value: str) -> str:
+        """Resolve relative SQLite paths against project root."""
+        prefix = "sqlite+aiosqlite:///./"
+        if value.startswith(prefix):
+            rel_path = value[len(prefix) :]
+            abs_path = (BASE_DIR / rel_path).resolve()
+            return f"sqlite+aiosqlite:///{abs_path.as_posix()}"
+        return value
+
+    @property
+    def prompts_dir(self) -> Path:
+        return BASE_DIR / "app" / "prompts"
+
+    @property
+    def data_dir(self) -> Path:
+        return BASE_DIR / "data"
+
+    @property
+    def seed_admin_ids(self) -> list[int]:
+        if not self.seed_admin_vk_ids.strip():
+            return []
+        return [int(item.strip()) for item in self.seed_admin_vk_ids.split(",") if item.strip()]
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Return cached settings instance."""
+    return Settings()
