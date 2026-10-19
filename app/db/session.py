@@ -29,8 +29,10 @@ def _migrate_schema(connection) -> None:
     columns = {column["name"] for column in inspector.get_columns("admin_transfers")}
     if "admin_engaged" not in columns:
         connection.execute(
-            text("ALTER TABLE admin_transfers ADD COLUMN admin_engaged BOOLEAN NOT NULL DEFAULT 0")
+            text("ALTER TABLE admin_transfers ADD COLUMN admin_engaged BOOLEAN NOT NULL DEFAULT FALSE")
         )
+    if "admin_vk_id" not in columns:
+        connection.execute(text("ALTER TABLE admin_transfers ADD COLUMN admin_vk_id BIGINT"))
 
 
 def _ensure_sqlite_dir(database_url: str) -> None:

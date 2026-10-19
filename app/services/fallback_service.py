@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,7 +27,7 @@ class FallbackService:
         self._session = session
         self._settings = settings
         self._user_vk_id = user_vk_id
-        self._tools = ToolExecutor(session, user_vk_id)
+        self._tools = ToolExecutor(session, user_vk_id, settings=settings)
 
     async def reply_by_intent(self, intent: str) -> str:
         """Return a reply for a button intent."""
@@ -40,23 +40,16 @@ class FallbackService:
             return await self._format_slots()
         return "Выберите действие на клавиатуре или напишите ваш вопрос."
 
-    async def try_reply(self, text: str) -> str | None:
-        """Return a reply for known free-text intents, or None if LLM is needed."""
+    @staticmethod
+    def classify(text: str) -> str | None:
+        """Detect a known free-text intent by keywords."""
         lowered = text.lower().strip()
         if not lowered:
             return None
-
         if any(word in lowered for word in ("привет", "здравств", "добрый", "хай", "hello")):
-            return (
-                f"Здравствуйте! Я консьерж салона «{self._settings.salon_name}».\n"
-                "Помогу записаться, расскажу об услугах и ценах.\n"
-                "Выберите кнопку ниже или напишите, что вас интересует."
-            )
-
+            return "greeting"
         if any(word in lowered for word in ("запис", "запишите", "хочу на", "забронир")):
-            services = await self._format_services(short=True)
-            return f"📅 {BOOKING_HINT}\n\n{services}"
-
+            return "book"
         if any(
             phrase in lowered
             for phrase in (
@@ -68,26 +61,49 @@ class FallbackService:
                 "что у вас есть",
             )
         ):
-            return await self._format_services()
-
+            return "services"
         if any(
             word in lowered
             for word in ("свобод", "слот", "когда можно", "свободное время", "ближайш")
         ):
-            return await self._format_slots()
-
+            return "slots"
         if any(word in lowered for word in ("мастер", "кто стриж", "специалист")):
-            return await self._format_masters()
-
+            return "masters"
         if any(word in lowered for word in ("адрес", "где вы", "как добраться", "находитесь")):
-            return (
-                f"📍 {self._settings.salon_name}\n"
-                f"Адрес: {self._settings.salon_address or 'уточняйте у администратора'}\n"
-                f"Телефон: {self._settings.salon_phone or 'уточняйте у администратора'}\n"
-                f"Часы работы: {self._settings.salon_working_hours or 'уточняйте у администратора'}"
-            )
-
+            return "address"
         return None
+
+    async def try_reply(self, text: str, allowed: set[str] | None = None) -> str | None:
+        """Return a reply for known free-text intents, or None if LLM is needed."""
+        intent = self.classify(text)
+        if intent is None or (allowed is not None and intent not in allowed):
+            return None
+
+        if intent == "greeting":
+            return (
+                f"Здравствуйте! Я консьерж салона «{self._settings.salon_name}».\n"
+                "Помогу записаться, расскажу об услугах и ценах.\n"
+                "Выберите кнопку ниже или напишите, что вас интересует."
+            )
+        if intent == "book":
+            services = await self._format_services(short=True)
+            return f"📅 {BOOKING_HINT}\n\n{services}"
+        if intent == "services":
+            return await self._format_services()
+        if intent == "slots":
+            return await self._format_slots()
+        if intent == "masters":
+            return await self._format_masters()
+        return self.contacts_text()
+
+    def contacts_text(self) -> str:
+        unknown = "уточняйте у администратора"
+        return (
+            f"📍 {self._settings.salon_name}\n"
+            f"Адрес: {self._settings.salon_address or unknown}\n"
+            f"Телефон: {self._settings.salon_phone or unknown}\n"
+            f"Часы работы: {self._settings.salon_working_hours or unknown}"
+        )
 
     async def _format_services(self, short: bool = False) -> str:
         raw = await self._tools.execute("get_services", {})
@@ -117,15 +133,18 @@ class FallbackService:
         return "\n".join(lines)
 
     async def _format_slots(self) -> str:
-        today = date.today()
+        schedule = self._tools.schedule
+        today = schedule.today()
         tomorrow = today + timedelta(days=1)
         lines = ["🕐 Свободное время:"]
 
         for day in (today, tomorrow):
-            raw = await self._tools.execute("get_available_slots", {"date": str(day)})
-            data = json.loads(raw)
-            slots = data.get("available_slots", [])
             label = "Сегодня" if day == today else "Завтра"
+            if schedule.window(day) is None:
+                lines.append(f"{label} ({day.strftime('%d.%m')}): выходной")
+                continue
+            free = await self._tools.free_slots(day, schedule.step)
+            slots = [t.strftime("%H:%M") for t in free]
             if slots:
                 preview = ", ".join(slots[:8])
                 extra = f" (+{len(slots) - 8})" if len(slots) > 8 else ""

@@ -20,5 +20,8 @@ def setup_logging(level: str = "INFO") -> None:
         stream=sys.stdout,
         force=True,
     )
+    from app.privacy import install_log_filter
+
+    install_log_filter()
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("vkbottle").setLevel(logging.INFO)

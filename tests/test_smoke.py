@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -15,17 +14,13 @@ from app.schemas.message import DialogActionType, IncomingMessage
 from app.services.dialog_service import DialogService
 from app.services.tools import ToolExecutor
 from app.utils.instance_lock import InstanceLock
+from tests.helpers import CLIENT_ID, future_day, make_settings
 
-TOMORROW = str(date.today() + timedelta(days=1))
+TOMORROW = str(future_day())
 
 
 def _settings() -> Settings:
-    return Settings(
-        vk_group_token="t",
-        vk_group_id=1,
-        openrouter_api_key="k",
-        salon_name="Test Salon",
-    )
+    return make_settings()
 
 
 def _llm_reply(content: str | None = None, tool_calls: list | None = None) -> dict:
@@ -36,7 +31,7 @@ def _llm_reply(content: str | None = None, tool_calls: list | None = None) -> di
 
 
 async def test_create_booking_and_conflict(seeded_session):
-    executor = ToolExecutor(seeded_session, user_vk_id=7)
+    executor = ToolExecutor(seeded_session, user_vk_id=7, settings=_settings())
     args = {"service_name": "женская стрижка", "date": TOMORROW, "time": "12:00", "phone": "+70000000000"}
 
     first = json.loads(await executor.execute("create_booking", args))
@@ -52,7 +47,7 @@ async def test_create_booking_and_conflict(seeded_session):
 
 
 async def test_create_booking_unknown_service(seeded_session):
-    executor = ToolExecutor(seeded_session, user_vk_id=7)
+    executor = ToolExecutor(seeded_session, user_vk_id=7, settings=_settings())
     result = json.loads(
         await executor.execute(
             "create_booking",
@@ -63,7 +58,7 @@ async def test_create_booking_unknown_service(seeded_session):
 
 
 async def test_unknown_tool(seeded_session):
-    result = json.loads(await ToolExecutor(seeded_session, 1).execute("drop_db", {}))
+    result = json.loads(await ToolExecutor(seeded_session, 1, settings=_settings()).execute("drop_db", {}))
     assert "Unknown tool" in result["error"]
 
 
@@ -78,16 +73,17 @@ async def test_buttons_do_not_call_llm(seeded_session, intent):
     openrouter.chat_completion.assert_not_called()
 
 
-async def test_resume_after_admin_transfer(seeded_session):
+async def test_resume_after_admin_transfer(full_session):
     openrouter = AsyncMock()
-    service = DialogService(seeded_session, openrouter, _settings())
+    service = DialogService(full_session, openrouter, _settings())
     await service.handle_message(IncomingMessage(user_id=5, peer_id=5, text="", intent="admin"))
     response = await service.handle_message(IncomingMessage(user_id=5, peer_id=5, text="отмена"))
     assert response.actions[0].type == DialogActionType.REPLY
-    assert "продолжаем" in response.actions[0].text
+    assert "снова на связи бот" in response.actions[0].text
 
 
-async def test_llm_tool_loop_creates_booking(seeded_session):
+async def test_llm_tool_loop_creates_booking(full_session):
+    seeded_session = full_session
     openrouter = AsyncMock()
     openrouter.extract_assistant_message = lambda r: r["choices"][0]["message"]
     openrouter.chat_completion.side_effect = [
@@ -114,22 +110,23 @@ async def test_llm_tool_loop_creates_booking(seeded_session):
     ]
     service = DialogService(seeded_session, openrouter, _settings())
     response = await service.handle_message(
-        IncomingMessage(user_id=9, peer_id=9, text="Запишите на мужскую стрижку завтра в 15, +70000000000")
+        IncomingMessage(user_id=CLIENT_ID, peer_id=CLIENT_ID, text="Запишите на мужскую стрижку завтра в 15, +70000000000")
     )
     assert response.actions[0].text == "Записал вас на завтра в 15:00."
-    bookings = await BookingRepository(seeded_session).list_by_user(9)
+    bookings = await BookingRepository(seeded_session).list_by_user(CLIENT_ID)
     assert len(bookings) == 1
     assert openrouter.chat_completion.await_count == 2
 
 
-async def test_llm_failure_uses_fallback(seeded_session):
+async def test_llm_failure_uses_fallback(full_session):
+    seeded_session = full_session
     from app.clients.openrouter import OpenRouterError
 
     openrouter = AsyncMock()
     openrouter.chat_completion.side_effect = OpenRouterError("down", status_code=503)
     service = DialogService(seeded_session, openrouter, _settings())
     response = await service.handle_message(
-        IncomingMessage(user_id=3, peer_id=3, text="Сколько стоит стрижка у вас, подскажите пожалуйста")
+        IncomingMessage(user_id=CLIENT_ID, peer_id=CLIENT_ID, text="Сколько стоит стрижка у вас, подскажите пожалуйста")
     )
     assert "2500" in response.actions[0].text
 

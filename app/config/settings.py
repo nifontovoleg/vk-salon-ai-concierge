@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -47,6 +48,13 @@ class Settings(BaseSettings):
         description="Comma-separated VK user IDs for initial admins",
     )
 
+    timezone: str = Field(default="Asia/Yekaterinburg", description="IANA timezone of the salon")
+    slot_step_minutes: int = Field(default=60, ge=5, le=240, description="Booking grid step")
+
+    require_consent: bool = Field(default=True, description="Ask PD consent before LLM dialog")
+    privacy_policy_url: str = Field(default="", description="Link to personal data policy")
+    mask_pii: bool = Field(default=True, description="Mask phones/emails in text sent to LLM")
+
     dialog_history_limit: int = Field(default=20, ge=1, le=100)
     openrouter_timeout: float = Field(default=60.0, ge=5.0)
     openrouter_max_tokens: int = Field(default=1024, ge=128)
@@ -55,6 +63,16 @@ class Settings(BaseSettings):
     @classmethod
     def strip_secrets(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        value = value.strip() or "Asia/Yekaterinburg"
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"Unknown TIMEZONE: {value}") from exc
+        return value
 
     @field_validator("database_url")
     @classmethod
@@ -74,6 +92,10 @@ class Settings(BaseSettings):
     @property
     def data_dir(self) -> Path:
         return BASE_DIR / "data"
+
+    @property
+    def tz(self) -> ZoneInfo:
+        return ZoneInfo(self.timezone)
 
     @property
     def seed_admin_ids(self) -> list[int]:

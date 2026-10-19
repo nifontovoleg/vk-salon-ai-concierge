@@ -34,6 +34,8 @@ class IncomingMessage:
 class DialogActionType(StrEnum):
     REPLY = "reply"
     TRANSFER_TO_ADMIN = "transfer_to_admin"
+    NOTIFY_BOOKING = "notify_booking"
+    FORWARD_TO_ADMIN = "forward_to_admin"
     NOOP = "noop"
 
 
@@ -45,6 +47,8 @@ class DialogAction:
     text: str = ""
     notify_admin: bool = False
     transfer_reason: str | None = None
+    booking_id: int | None = None
+    admin_vk_id: int | None = None
 
 
 @dataclass(slots=True)
@@ -61,9 +65,21 @@ class DialogResponse:
             keyboard_json=keyboard_json,
         )
 
+    @property
+    def client_texts(self) -> list[str]:
+        """Texts that will be sent to the client."""
+        return [
+            a.text
+            for a in self.actions
+            if a.type in (DialogActionType.REPLY, DialogActionType.TRANSFER_TO_ADMIN)
+        ]
+
     @classmethod
-    def transfer_to_admin(cls, text: str, reason: str | None = None) -> "DialogResponse":
+    def transfer_to_admin(
+        cls, text: str, reason: str | None = None, keyboard_json: str | None = None
+    ) -> "DialogResponse":
         return cls(
+            keyboard_json=keyboard_json,
             actions=[
                 DialogAction(
                     type=DialogActionType.TRANSFER_TO_ADMIN,

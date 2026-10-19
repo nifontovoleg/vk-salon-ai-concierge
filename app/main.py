@@ -12,9 +12,10 @@ from vkbottle.polling import BotPolling
 
 from app.clients.openrouter import OpenRouterClient
 from app.config import get_settings
-from app.db.session import close_db, init_db
+from app.db.session import close_db, get_session, init_db
 from app.handlers import register_handlers
 from app.logging.setup import setup_logging
+from app.services.admin_service import AdminService
 from app.utils.instance_lock import InstanceLock
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,9 @@ async def run_bot() -> None:
     logger.info("Starting AI-консьерж for salon: %s", settings.salon_name)
 
     await init_db()
+    await sync_admins(settings.seed_admin_ids)
+    if settings.require_consent and not settings.privacy_policy_url:
+        logger.warning("PRIVACY_POLICY_URL не задан: в запросе согласия не будет ссылки на политику")
 
     openrouter = OpenRouterClient(settings)
     polling = BotPolling(group_id=settings.vk_group_id, skip_old_events=True)
@@ -83,6 +87,21 @@ async def run_bot() -> None:
         await close_db()
         instance_lock.release()
         logger.info("Shutdown complete")
+
+
+async def sync_admins(vk_ids: list[int]) -> None:
+    """Activate administrators from SEED_ADMIN_VK_IDS on every start."""
+    async with get_session() as session:
+        admin_service = AdminService(session)
+        await admin_service.sync_admins(vk_ids)
+        active = await admin_service.list_admins()
+    if not active:
+        logger.warning(
+            "Нет активных администраторов: укажите SEED_ADMIN_VK_IDS, "
+            "иначе запись и передача диалога останутся без уведомлений"
+        )
+    else:
+        logger.info("Active administrators: %s", len(active))
 
 
 def main() -> None:

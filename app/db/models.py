@@ -143,5 +143,17 @@ class AdminTransfer(Base):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     admin_engaged: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    admin_vk_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ClientConsent(Base):
+    """Client consent to personal data processing (152-FZ)."""
+
+    __tablename__ = "client_consents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_vk_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
+    policy_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    given_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

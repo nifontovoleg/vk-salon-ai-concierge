@@ -1,14 +1,18 @@
 """Data access layer."""
 
-from sqlalchemy import and_, select
+from datetime import datetime, timezone
+
+from sqlalchemy import and_, delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.db.models import (
     AdminTransfer,
     Administrator,
     Booking,
     BookingStatus,
+    ClientConsent,
     DialogMessage,
     Master,
     ProcessedVkMessage,
@@ -144,6 +148,26 @@ class BookingRepository:
         )
         return list(result.scalars().all())
 
+    async def list_active_intervals(self, booking_date) -> list[tuple]:
+        """Return (start_time, duration_minutes, master_id) of pending/confirmed bookings on a date."""
+        result = await self._session.execute(
+            select(Booking.booking_time, Service.duration_minutes, Booking.master_id)
+            .join(Service, Booking.service_id == Service.id)
+            .where(
+                Booking.booking_date == booking_date,
+                Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED]),
+            )
+        )
+        return [tuple(row) for row in result.all()]
+
+    async def get_with_relations(self, booking_id: int) -> Booking | None:
+        result = await self._session.execute(
+            select(Booking)
+            .where(Booking.id == booking_id)
+            .options(selectinload(Booking.service), selectinload(Booking.master))
+        )
+        return result.scalar_one_or_none()
+
     async def list_by_user(self, user_vk_id: int) -> list[Booking]:
         result = await self._session.execute(
             select(Booking)
@@ -223,50 +247,82 @@ class DialogRepository:
         await self._session.flush()
         return transfer
 
-    async def is_admin_engaged(self, user_vk_id: int) -> bool:
+    async def get_active_transfer(self, user_vk_id: int) -> AdminTransfer | None:
         result = await self._session.execute(
-            select(AdminTransfer).where(
+            select(AdminTransfer)
+            .where(
                 AdminTransfer.user_vk_id == user_vk_id,
                 AdminTransfer.is_active.is_(True),
-                AdminTransfer.admin_engaged.is_(True),
             )
+            .order_by(AdminTransfer.id.desc())
+            .limit(1)
         )
-        return result.scalar_one_or_none() is not None
+        return result.scalar_one_or_none()
 
-    async def engage_admin(self, user_vk_id: int) -> None:
-        result = await self._session.execute(
-            select(AdminTransfer).where(
-                AdminTransfer.user_vk_id == user_vk_id,
-                AdminTransfer.is_active.is_(True),
-            )
-        )
-        transfer = result.scalar_one_or_none()
-        if transfer:
-            transfer.admin_engaged = True
+    async def is_admin_engaged(self, user_vk_id: int) -> bool:
+        transfer = await self.get_active_transfer(user_vk_id)
+        return transfer is not None and transfer.admin_engaged
+
+    async def engage_admin(self, user_vk_id: int, admin_vk_id: int | None = None) -> str:
+        """Mark that an admin took the dialog.
+
+        Returns "ok", "no_transfer", "already_yours" or "taken".
+        """
+        transfer = await self.get_active_transfer(user_vk_id)
+        if transfer is None:
+            return "no_transfer"
+        if transfer.admin_engaged:
+            if admin_vk_id is not None and transfer.admin_vk_id not in (None, admin_vk_id):
+                return "taken"
+            if transfer.admin_vk_id == admin_vk_id:
+                return "already_yours"
+        transfer.admin_engaged = True
+        transfer.admin_vk_id = admin_vk_id
+        await self._session.flush()
+        return "ok"
 
     async def has_active_transfer(self, user_vk_id: int) -> bool:
-        result = await self._session.execute(
-            select(AdminTransfer).where(
-                AdminTransfer.user_vk_id == user_vk_id,
-                AdminTransfer.is_active.is_(True),
-            )
-        )
-        return result.scalar_one_or_none() is not None
+        return await self.get_active_transfer(user_vk_id) is not None
 
-    async def resolve_transfer(self, user_vk_id: int) -> None:
-        from datetime import datetime, timezone
-
-        result = await self._session.execute(
-            select(AdminTransfer).where(
-                AdminTransfer.user_vk_id == user_vk_id,
-                AdminTransfer.is_active.is_(True),
-            )
-        )
-        transfer = result.scalar_one_or_none()
+    async def resolve_transfer(self, user_vk_id: int) -> AdminTransfer | None:
+        """Close the active transfer. Returns the closed transfer or None."""
+        transfer = await self.get_active_transfer(user_vk_id)
         if transfer:
             transfer.is_active = False
             transfer.admin_engaged = False
             transfer.resolved_at = datetime.now(timezone.utc)
+            await self._session.flush()
+        return transfer
+
+    async def delete_history(self, user_vk_id: int) -> None:
+        await self._session.execute(
+            delete(DialogMessage).where(DialogMessage.user_vk_id == user_vk_id)
+        )
+
+
+class ConsentRepository:
+    """Personal data processing consents."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def has(self, user_vk_id: int) -> bool:
+        result = await self._session.execute(
+            select(ClientConsent.id).where(ClientConsent.user_vk_id == user_vk_id)
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def give(self, user_vk_id: int, policy_url: str | None) -> None:
+        if await self.has(user_vk_id):
+            return
+        self._session.add(ClientConsent(user_vk_id=user_vk_id, policy_url=policy_url or None))
+        await self._session.flush()
+
+    async def revoke(self, user_vk_id: int) -> bool:
+        result = await self._session.execute(
+            delete(ClientConsent).where(ClientConsent.user_vk_id == user_vk_id)
+        )
+        return bool(result.rowcount)
 
 
 class ProcessedMessageRepository:
