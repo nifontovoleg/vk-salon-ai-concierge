@@ -56,7 +56,7 @@ async def _create(session, settings, **args):
 async def test_reject_past_and_off_grid(full_session):
     settings = make_settings()
     assert "прошедшую" in (await _create(full_session, settings, date="2020-01-01"))["error"]
-    assert "сетки" in (await _create(full_session, settings, time="12:30"))["error"]
+    assert "сетки" in (await _create(full_session, settings, time="12:15"))["error"]
     assert "сетки" in (await _create(full_session, settings, time="23:00"))["error"]
     assert "сетки" in (await _create(full_session, settings, time="19:30"))["error"]
 
@@ -98,3 +98,17 @@ async def test_slots_past_date_error(full_session):
     result = json.loads(await ToolExecutor(full_session, 7, settings=make_settings()).execute(
         "get_available_slots", {"date": "2020-01-01"}))
     assert "прошлом" in result["error"]
+
+
+def test_default_slot_step_is_30_minutes():
+    from app.config.settings import Settings
+
+    assert Settings.model_fields["slot_step_minutes"].default == 30
+
+
+async def test_saturday_half_hour_slot_is_bookable(full_session):
+    settings = make_settings()  # шаг по умолчанию — 30 минут
+    day = future_day(1)
+    while day.weekday() != 5:
+        day += timedelta(days=1)
+    assert (await _create(full_session, settings, date=str(day), time="14:30"))["success"]

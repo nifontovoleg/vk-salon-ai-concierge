@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     )
 
     timezone: str = Field(default="Asia/Yekaterinburg", description="IANA timezone of the salon")
-    slot_step_minutes: int = Field(default=60, ge=5, le=240, description="Booking grid step")
+    slot_step_minutes: int = Field(default=30, ge=5, le=240, description="Booking grid step")
     salon_days_off: str = Field(default="", description="Salon holidays: 2026-12-31, 2027-01-01..2027-01-03")
     master_schedules: str = Field(
         default="", description="Per-master hours: «Анна=Пн-Ср 10:00-18:00 | Дмитрий=Чт-Вс 12:00-20:00»"

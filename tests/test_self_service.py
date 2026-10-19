@@ -179,7 +179,7 @@ async def test_llm_tools_reschedule_and_list(full_session):
     assert moved["success"] and moved["was"].endswith("12:00")
     assert executor.notifications == [(mine, "rescheduled", moved["was"])]
     bad = json.loads(await executor.execute("reschedule_booking", {
-        "booking_id": mine, "date": DAY.isoformat(), "time": "17:30"}))
+        "booking_id": mine, "date": DAY.isoformat(), "time": "17:15"}))
     assert "сетки" in bad["error"] and bad["nearest_free_slots"]
 
 

@@ -19,7 +19,8 @@ async def test_get_available_slots_tool(seeded_session, settings):
         await executor.execute("get_available_slots", {"date": str(future_day())})
     )
     assert result["available_slots"][0] == "10:00"
-    assert result["available_slots"][-1] == "19:00"
+    assert "14:30" in result["available_slots"]  # шаг 30 минут по умолчанию
+    assert result["available_slots"][-1] == "19:30"
 
 
 async def test_transfer_to_admin_tool(full_session, settings):
