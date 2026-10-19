@@ -7,6 +7,8 @@ from app.keyboards.main import (
     consent_keyboard,
     handoff_keyboard,
     main_keyboard,
+    my_bookings_keyboard,
+    reschedule_keyboard,
 )
 
 __all__ = [
@@ -16,4 +18,6 @@ __all__ = [
     "consent_keyboard",
     "handoff_keyboard",
     "main_keyboard",
+    "my_bookings_keyboard",
+    "reschedule_keyboard",
 ]

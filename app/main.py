@@ -16,6 +16,7 @@ from app.db.session import close_db, get_session, init_db
 from app.handlers import register_handlers
 from app.logging.setup import setup_logging
 from app.services.admin_service import AdminService
+from app.services.booking_service import sync_master_schedules
 from app.utils.instance_lock import InstanceLock
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,8 @@ async def run_bot() -> None:
 
     await init_db()
     await sync_admins(settings.seed_admin_ids)
+    async with get_session() as session:
+        await sync_master_schedules(session, settings)
     if settings.require_consent and not settings.privacy_policy_url:
         logger.warning("PRIVACY_POLICY_URL не задан: в запросе согласия не будет ссылки на политику")
 

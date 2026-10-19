@@ -50,6 +50,16 @@ class Settings(BaseSettings):
 
     timezone: str = Field(default="Asia/Yekaterinburg", description="IANA timezone of the salon")
     slot_step_minutes: int = Field(default=60, ge=5, le=240, description="Booking grid step")
+    salon_days_off: str = Field(default="", description="Salon holidays: 2026-12-31, 2027-01-01..2027-01-03")
+    master_schedules: str = Field(
+        default="", description="Per-master hours: «Анна=Пн-Ср 10:00-18:00 | Дмитрий=Чт-Вс 12:00-20:00»"
+    )
+    master_days_off: str = Field(
+        default="", description="Per-master days off: «Анна=2026-11-02, 2026-11-10..2026-11-15»"
+    )
+    cancel_min_hours: float = Field(
+        default=2.0, ge=0, description="Client can't cancel/reschedule online closer than this"
+    )
 
     require_consent: bool = Field(default=True, description="Ask PD consent before LLM dialog")
     privacy_policy_url: str = Field(default="", description="Link to personal data policy")
@@ -92,6 +102,25 @@ class Settings(BaseSettings):
     @property
     def data_dir(self) -> Path:
         return BASE_DIR / "data"
+
+    @staticmethod
+    def _per_master(raw: str) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for item in (raw or "").split("|"):
+            if "=" not in item:
+                continue
+            name, value = item.split("=", 1)
+            if name.strip():
+                result[name.strip()] = value.strip()
+        return result
+
+    @property
+    def master_schedule_map(self) -> dict[str, str]:
+        return self._per_master(self.master_schedules)
+
+    @property
+    def master_days_off_map(self) -> dict[str, str]:
+        return self._per_master(self.master_days_off)
 
     @property
     def tz(self) -> ZoneInfo:

@@ -49,3 +49,11 @@ class FakeApi:
 
     def to(self, user_id: int) -> list[str]:
         return [m["message"] for m in self.sent if m["user_id"] == user_id]
+
+
+def next_weekday(weekday: int, min_days: int = 1) -> date:
+    """Nearest future date (>= today+min_days) with the given weekday (0 = Monday)."""
+    day = salon_today() + timedelta(days=min_days)
+    while day.weekday() != weekday:
+        day += timedelta(days=1)
+    return day

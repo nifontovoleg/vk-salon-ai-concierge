@@ -96,8 +96,19 @@ class MasterRepository:
                 return item
         return None
 
-    async def create(self, name: str, specialization: str | None = None) -> Master:
-        master = Master(name=name, specialization=specialization)
+    async def create(
+        self,
+        name: str,
+        specialization: str | None = None,
+        working_hours: str | None = None,
+        days_off: str | None = None,
+    ) -> Master:
+        master = Master(
+            name=name,
+            specialization=specialization,
+            working_hours=working_hours,
+            days_off=days_off,
+        )
         self._session.add(master)
         await self._session.flush()
         return master
@@ -148,17 +159,35 @@ class BookingRepository:
         )
         return list(result.scalars().all())
 
-    async def list_active_intervals(self, booking_date) -> list[tuple]:
+    async def list_active_intervals(
+        self, booking_date, exclude_booking_id: int | None = None
+    ) -> list[tuple]:
         """Return (start_time, duration_minutes, master_id) of pending/confirmed bookings on a date."""
+        conditions = [
+            Booking.booking_date == booking_date,
+            Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED]),
+        ]
+        if exclude_booking_id is not None:
+            conditions.append(Booking.id != exclude_booking_id)
         result = await self._session.execute(
             select(Booking.booking_time, Service.duration_minutes, Booking.master_id)
             .join(Service, Booking.service_id == Service.id)
-            .where(
-                Booking.booking_date == booking_date,
-                Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED]),
-            )
+            .where(*conditions)
         )
         return [tuple(row) for row in result.all()]
+
+    async def list_active_for_user(self, user_vk_id: int) -> list[Booking]:
+        """Pending/confirmed bookings of a user with service and master loaded."""
+        result = await self._session.execute(
+            select(Booking)
+            .where(
+                Booking.user_vk_id == user_vk_id,
+                Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED]),
+            )
+            .options(selectinload(Booking.service), selectinload(Booking.master))
+            .order_by(Booking.booking_date, Booking.booking_time)
+        )
+        return list(result.scalars().all())
 
     async def get_with_relations(self, booking_id: int) -> Booking | None:
         result = await self._session.execute(

@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy import inspect, text
 
 from app.config import get_settings
-from app.db.models import Base
+from app.db.models import ACTIVE_BOOKING_INDEX, ACTIVE_STATUS_SQL, Base
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,12 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 def _migrate_schema(connection) -> None:
     inspector = inspect(connection)
+    if inspector.has_table("masters"):
+        master_columns = {column["name"] for column in inspector.get_columns("masters")}
+        if "working_hours" not in master_columns:
+            connection.execute(text("ALTER TABLE masters ADD COLUMN working_hours VARCHAR(255)"))
+        if "days_off" not in master_columns:
+            connection.execute(text("ALTER TABLE masters ADD COLUMN days_off TEXT"))
     if not inspector.has_table("admin_transfers"):
         return
     columns = {column["name"] for column in inspector.get_columns("admin_transfers")}
@@ -63,7 +69,26 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_migrate_schema)
 
+    await _ensure_active_booking_index(_engine)
     logger.info("Database initialized: %s", settings.database_url.split("@")[-1])
+
+
+async def _ensure_active_booking_index(engine: AsyncEngine) -> None:
+    """Create the partial unique index on old databases (separate transaction)."""
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {ACTIVE_BOOKING_INDEX} "
+                    f"ON bookings (master_id, booking_date, booking_time) WHERE {ACTIVE_STATUS_SQL}"
+                )
+            )
+    except Exception as exc:
+        logger.warning(
+            "Не удалось создать уникальный индекс активных записей (есть дубли?): %s. "
+            "Защита от гонок работает через блокировку дня.",
+            exc,
+        )
 
 
 async def close_db() -> None:

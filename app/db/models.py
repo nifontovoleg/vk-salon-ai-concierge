@@ -9,12 +9,14 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     Time,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -28,6 +30,10 @@ class BookingStatus(StrEnum):
     CONFIRMED = "confirmed"
     CANCELLED = "cancelled"
     COMPLETED = "completed"
+
+
+ACTIVE_STATUS_SQL = "status IN ('pending', 'confirmed')"
+ACTIVE_BOOKING_INDEX = "uq_bookings_active_master_start"
 
 
 class MessageRole(StrEnum):
@@ -70,6 +76,12 @@ class Master(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     specialization: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    working_hours: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, comment="«Пн-Ср 10:00-18:00»; пусто — часы салона"
+    )
+    days_off: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="«2026-11-02, 2026-11-10..2026-11-15»"
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -80,6 +92,19 @@ class Booking(Base):
     """Client appointment."""
 
     __tablename__ = "bookings"
+    __table_args__ = (
+        # Страховка на уровне БД: у мастера не может быть двух активных записей с одним началом.
+        # Пересечения с разным началом исключает блокировка дня в BookingService.
+        Index(
+            ACTIVE_BOOKING_INDEX,
+            "master_id",
+            "booking_date",
+            "booking_time",
+            unique=True,
+            sqlite_where=text(ACTIVE_STATUS_SQL),
+            postgresql_where=text(ACTIVE_STATUS_SQL),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_vk_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
@@ -157,3 +182,12 @@ class ClientConsent(Base):
     user_vk_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
     policy_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     given_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BookingDayLock(Base):
+    """One row per date; bookings for that date are written under its row lock."""
+
+    __tablename__ = "booking_day_locks"
+
+    booking_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

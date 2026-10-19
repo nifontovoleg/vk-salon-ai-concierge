@@ -22,9 +22,10 @@ SEED_SERVICES = [
     ("Маникюр", "Классический маникюр", 1800, 60, ServiceCategory.MANICURE),
 ]
 
+# (имя, специализация, часы работы — пусто = часы салона, выходные даты)
 SEED_MASTERS = [
-    ("Анна", "Стрижки, окрашивание"),
-    ("Дмитрий", "Мужские стрижки"),
+    ("Анна", "Стрижки, окрашивание", "Пн-Пт 10:00-18:00", None),
+    ("Дмитрий", "Мужские стрижки", "Ср-Вс 12:00-20:00", None),
 ]
 
 
@@ -47,8 +48,8 @@ async def seed() -> None:
                 logger.info("Added service: %s (%s rub)", name, price)
 
             master_repo = MasterRepository(session)
-            for name, spec in SEED_MASTERS:
-                await master_repo.create(name, spec)
+            for name, spec, hours, days_off in SEED_MASTERS:
+                await master_repo.create(name, spec, working_hours=hours, days_off=days_off)
                 logger.info("Added master: %s", name)
 
             admin_repo = AdministratorRepository(session)

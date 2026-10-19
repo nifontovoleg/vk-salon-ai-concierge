@@ -29,6 +29,7 @@ class IncomingMessage:
     attachments: list[IncomingAttachment] = field(default_factory=list)
     raw_payload: dict | None = None
     intent: str | None = None
+    payload: dict | None = None
 
 
 class DialogActionType(StrEnum):
@@ -49,6 +50,7 @@ class DialogAction:
     transfer_reason: str | None = None
     booking_id: int | None = None
     admin_vk_id: int | None = None
+    notify_kind: str = "new"
 
 
 @dataclass(slots=True)

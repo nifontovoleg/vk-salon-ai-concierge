@@ -6,13 +6,19 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from datetime import date, time
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.openrouter import OpenRouterClient
 from app.config import Settings
 from app.db.models import MessageRole
-from app.keyboards import consent_keyboard, handoff_keyboard
+from app.keyboards import (
+    consent_keyboard,
+    handoff_keyboard,
+    my_bookings_keyboard,
+    reschedule_keyboard,
+)
 from app.privacy import PHONE_LABEL, extract_phone, mask_pii
 from app.repositories import ConsentRepository, DialogRepository
 from app.schemas.message import (
@@ -23,6 +29,7 @@ from app.schemas.message import (
     IncomingMessage,
 )
 from app.services.admin_service import AdminService
+from app.services.booking_service import BookingService, describe_booking, when
 from app.services.fallback_service import FallbackService
 from app.services.schedule import DAY_LABELS
 from app.services.tools import TOOL_DEFINITIONS, ToolExecutor
@@ -52,6 +59,10 @@ CONSENT_COMMANDS = frozenset({"согласен", "согласна", "я сог
 REVOKE_COMMANDS = frozenset({"отозвать согласие", "отзываю согласие"})
 GREETING_WORDS = ("привет", "здравств", "добрый", "хай", "hello")
 NO_CONSENT_ALLOWED = {"greeting", "services", "slots", "masters", "address"}
+CLIENT_BOOKING_INTENTS = frozenset(
+    {"my_bookings", "booking_client_cancel", "booking_reschedule", "booking_move"}
+)
+MY_BOOKINGS_COMMANDS = frozenset({"мои записи", "моя запись", "мои брони"})
 
 
 def normalize_command(text: str) -> str:
@@ -140,6 +151,11 @@ class DialogService:
                 "Кнопки продолжают работать."
             )
 
+        if message.intent in CLIENT_BOOKING_INTENTS or command in MY_BOOKINGS_COMMANDS:
+            return await self._client_booking_action(
+                user_id, message.intent or "my_bookings", message.payload or {}
+            )
+
         if message.intent == "admin" or wants_admin(message.text):
             return await self._request_admin(user_id, "Пользователь запросил администратора", transfer)
 
@@ -161,6 +177,9 @@ class DialogService:
             if greeting:
                 return DialogResponse.reply(greeting)
 
+        if not has_consent and fallback.classify(user_content) == "my_bookings":
+            return await self._client_booking_action(user_id, "my_bookings", {})
+
         if not has_consent:
             keyword_reply = await fallback.try_reply(user_content, allowed=NO_CONSENT_ALLOWED)
             if keyword_reply:
@@ -168,9 +187,94 @@ class DialogService:
             return DialogResponse.reply(self._consent_text(), keyboard_json=consent_keyboard())
 
         await self._dialogs.add_message(user_id, MessageRole.USER, user_content)
+        # Коммит до запроса к модели: SQLite не держит блокировку записи, пока ждём LLM.
+        await self._session.commit()
         return await self._llm_reply(user_id, user_content, fallback)
 
     # ---------------------------------------------------------------- helpers
+
+    async def _client_booking_action(self, user_id: int, intent: str, payload: dict) -> DialogResponse:
+        """«Мои записи», отмена и перенос своей записи кнопками — без LLM."""
+        service = BookingService(self._session, self._settings)
+        cutoff = self._settings.cancel_min_hours
+
+        if intent == "my_bookings":
+            bookings = await service.list_upcoming(user_id)
+            if not bookings:
+                return DialogResponse.reply(
+                    "У вас нет предстоящих записей. Нажмите «Записаться», чтобы выбрать время."
+                )
+            lines = ["Ваши записи:"] + [describe_booking(b) for b in bookings[:5]]
+            if len(bookings) > 5:
+                lines.append(f"…и ещё {len(bookings) - 5}, показаны ближайшие 5.")
+            if cutoff:
+                lines.append(f"\nОтменить или перенести онлайн можно не позднее чем за {cutoff:g} ч до начала.")
+            return DialogResponse.reply(
+                "\n".join(lines), keyboard_json=my_bookings_keyboard([b.id for b in bookings[:5]])
+            )
+
+        try:
+            booking_id = int(payload.get("booking_id") or 0)
+        except (TypeError, ValueError):
+            booking_id = 0
+        if not booking_id:
+            return DialogResponse.reply("Не удалось определить запись. Нажмите «Мои записи».")
+
+        if intent == "booking_client_cancel":
+            result = await service.cancel_by_client(user_id, booking_id)
+            if not result.ok:
+                return DialogResponse.reply(result.error)
+            response = DialogResponse.reply(
+                f"Запись #{booking_id} на {result.old_when} отменена. Администратор получит уведомление."
+            )
+            response.actions.append(
+                DialogAction(type=DialogActionType.NOTIFY_BOOKING, booking_id=booking_id, notify_kind="cancelled")
+            )
+            return response
+
+        if intent == "booking_reschedule":
+            error = await service.check_changeable(user_id, booking_id)
+            if error:
+                return DialogResponse.reply(error)
+            booking = await service.get(booking_id)
+            slots = await service.upcoming_slots(
+                booking.service.duration_minutes, booking.master_id, exclude_booking_id=booking_id
+            )
+            if not slots:
+                phone = f" Позвоните в салон: {self._settings.salon_phone}" if self._settings.salon_phone else ""
+                return DialogResponse.reply(f"Свободного времени в ближайшие две недели нет.{phone}")
+            return DialogResponse.reply(
+                f"Выберите новое время для записи {describe_booking(booking)}:",
+                keyboard_json=reschedule_keyboard(booking_id, slots),
+            )
+
+        # booking_move
+        try:
+            day = date.fromisoformat(str(payload.get("date")))
+            start = time.fromisoformat(str(payload.get("time")))
+        except ValueError:
+            return DialogResponse.reply("Не удалось разобрать время. Нажмите «Мои записи» ещё раз.")
+        result = await service.reschedule(user_id, booking_id, day, start)
+        if not result.ok:
+            if result.nearest:
+                return DialogResponse.reply(
+                    f"{result.error}. Ближайшее свободное время:",
+                    keyboard_json=reschedule_keyboard(booking_id, result.nearest),
+                )
+            return DialogResponse.reply(result.error)
+        response = DialogResponse.reply(
+            f"Запись #{booking_id} перенесена на {when(day, start)}. "
+            "Она снова ждёт подтверждения администратора."
+        )
+        response.actions.append(
+            DialogAction(
+                type=DialogActionType.NOTIFY_BOOKING,
+                booking_id=booking_id,
+                notify_kind="rescheduled",
+                text=result.old_when or "",
+            )
+        )
+        return response
 
     async def _has_consent(self, user_id: int) -> bool:
         if not self._settings.require_consent:
@@ -283,9 +387,14 @@ class DialogService:
             )
         else:
             response = DialogResponse.reply(text)
-        for booking_id in executor.created_booking_ids:
+        for booking_id, kind, note in executor.notifications:
             response.actions.append(
-                DialogAction(type=DialogActionType.NOTIFY_BOOKING, booking_id=booking_id)
+                DialogAction(
+                    type=DialogActionType.NOTIFY_BOOKING,
+                    booking_id=booking_id,
+                    notify_kind=kind,
+                    text=note or "",
+                )
             )
         return response
 

@@ -48,6 +48,12 @@ class FallbackService:
             return None
         if any(word in lowered for word in ("привет", "здравств", "добрый", "хай", "hello")):
             return "greeting"
+        if any(
+            phrase in lowered
+            for phrase in ("мои запис", "моя запис", "отменить запис", "отмените запис",
+                           "перенести запис", "перенесите запис", "отменить мою", "перенести мою")
+        ):
+            return "my_bookings"
         if any(word in lowered for word in ("запис", "запишите", "хочу на", "забронир")):
             return "book"
         if any(
@@ -85,6 +91,8 @@ class FallbackService:
                 "Помогу записаться, расскажу об услугах и ценах.\n"
                 "Выберите кнопку ниже или напишите, что вас интересует."
             )
+        if intent == "my_bookings":
+            return "Ваши записи — по кнопке «Мои записи»: там можно отменить или перенести запись."
         if intent == "book":
             services = await self._format_services(short=True)
             return f"📅 {BOOKING_HINT}\n\n{services}"
@@ -129,7 +137,8 @@ class FallbackService:
         lines = ["👤 Наши мастера:"]
         for master in masters:
             spec = master.get("specialization") or "универсал"
-            lines.append(f"• {master['name']} — {spec}")
+            hours = master.get("working_hours") or "по часам салона"
+            lines.append(f"• {master['name']} — {spec} ({hours})")
         return "\n".join(lines)
 
     async def _format_slots(self) -> str:

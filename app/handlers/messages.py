@@ -33,7 +33,12 @@ from app.services.dialog_service import DialogService
 
 logger = logging.getLogger(__name__)
 
-BUTTON_INTENTS = frozenset({"book", "services", "slots", "admin", "resume", "consent_yes", "consent_no"})
+BUTTON_INTENTS = frozenset(
+    {
+        "book", "services", "slots", "admin", "resume", "consent_yes", "consent_no",
+        "my_bookings", "booking_client_cancel", "booking_reschedule", "booking_move",
+    }
+)
 ADMIN_ONLY_TEXT = "Эта кнопка доступна только администраторам."
 ERROR_TEXT = "Извините, что-то пошло не так. Попробуйте ещё раз или нажмите «Администратор»."
 
@@ -142,6 +147,7 @@ async def route_message(
 
     incoming = message_from_vk(message)
     incoming.intent = action if action in BUTTON_INTENTS else None
+    incoming.payload = payload
 
     async with get_session() as session:
         response = await DialogService(session, openrouter, settings).handle_message(incoming)
@@ -160,7 +166,7 @@ async def execute_response(
             await answer(action.text, response.keyboard_json or handoff_keyboard())
             await notify_admins(api, user_id, action.transfer_reason)
         elif action.type == DialogActionType.NOTIFY_BOOKING and action.booking_id:
-            await notify_booking(api, action.booking_id)
+            await notify_booking(api, action.booking_id, action.notify_kind, action.text or None)
         elif action.type == DialogActionType.FORWARD_TO_ADMIN:
             await forward_to_admin(api, settings, action.admin_vk_id, user_id, action.text)
 
@@ -184,21 +190,30 @@ async def notify_admins(api, user_vk_id: int, reason: str | None) -> int:
     return sent
 
 
-async def notify_booking(api, booking_id: int) -> int:
+async def notify_booking(api, booking_id: int, kind: str = "new", note: str | None = None) -> int:
+    """Send a booking card to admins. kind: new | rescheduled | cancelled."""
     async with get_session() as session:
         booking = await BookingService(session).get(booking_id)
         admins = await AdminService(session).list_admins()
-        text = format_admin_notification(booking) if booking else None
+        text = None
+        if booking is not None:
+            header = None
+            if kind == "rescheduled":
+                header = f"Клиент перенёс запись #{booking.id} (было: {note or '?'}), нужно подтвердить заново"
+            elif kind == "cancelled":
+                header = f"Клиент отменил запись #{booking.id}"
+            text = format_admin_notification(booking, header)
 
     if text is None:
         logger.warning("Booking #%s not found for notification", booking_id)
         return 0
     if not admins:
-        logger.warning("Booking #%s created, but no active administrators to notify", booking_id)
+        logger.warning("Booking #%s (%s): no active administrators to notify", booking_id, kind)
         return 0
+    keyboard = None if kind == "cancelled" else booking_admin_keyboard(booking_id)
     sent = 0
     for admin in admins:
-        sent += await send(api, admin.vk_id, text, booking_admin_keyboard(booking_id))
+        sent += await send(api, admin.vk_id, text, keyboard)
     return sent
 
 
