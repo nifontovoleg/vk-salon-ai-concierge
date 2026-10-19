@@ -41,7 +41,8 @@ class InstanceLock:
                 old_pid = int(self._path.read_text(encoding="utf-8").strip())
             except (ValueError, OSError):
                 old_pid = 0
-            if old_pid and _is_process_running(old_pid):
+            # old_pid == os.getpid(): stale lock after SIGKILL in Docker (PID 1 again)
+            if old_pid and old_pid != os.getpid() and _is_process_running(old_pid):
                 raise RuntimeError(
                     f"Бот уже запущен (PID {old_pid}). "
                     "Остановите другие процессы `python -m app.main`."

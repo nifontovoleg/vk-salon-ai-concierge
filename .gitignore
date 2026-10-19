@@ -5,12 +5,17 @@ __pycache__/
 dist/
 build/
 .env
+.env.*
+!.env.example
 data/
 *.db
+*.log
 bot.lock
+secrets/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.tmp/
 .idea/
 .vscode/
 .vkbottle/
