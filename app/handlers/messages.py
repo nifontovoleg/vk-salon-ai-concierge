@@ -37,6 +37,7 @@ BUTTON_INTENTS = frozenset(
     {
         "book", "services", "slots", "admin", "resume", "consent_yes", "consent_no",
         "my_bookings", "booking_client_cancel", "booking_reschedule", "booking_move",
+        "solo_service", "solo_slot",
     }
 )
 ADMIN_ONLY_TEXT = "Эта кнопка доступна только администраторам."

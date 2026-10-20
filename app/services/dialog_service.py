@@ -32,7 +32,10 @@ from app.services.admin_service import AdminService
 from app.services.booking_service import BookingService, describe_booking, when
 from app.services.fallback_service import FallbackService
 from app.services.schedule import DAY_LABELS
+from app.services.solo_service import SOLO_PROMPT, SoloFlow, guard_prices
 from app.services.tools import TOOL_DEFINITIONS, ToolExecutor
+
+SOLO_TOOL_DEFINITIONS = [t for t in TOOL_DEFINITIONS if t["function"]["name"] != "get_masters"]
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +138,10 @@ class DialogService:
 
         if message.intent == "consent_yes" or command in CONSENT_COMMANDS:
             await self._consents.give(user_id, self._settings.privacy_policy_url)
+            if self._settings.solo_mode and await SoloFlow(
+                self._session, self._settings, user_id, True
+            ).pending():
+                return DialogResponse.reply("Спасибо, согласие сохранено. Пришлите номер телефона — и запись готова.")
             return DialogResponse.reply(
                 "Спасибо, согласие сохранено. Напишите ваш вопрос ещё раз — отвечу.\n"
                 "Отозвать согласие: напишите «отозвать согласие»."
@@ -161,6 +168,11 @@ class DialogService:
 
         fallback = FallbackService(self._session, self._settings, user_id)
         has_consent = await self._has_consent(user_id)
+
+        if self._settings.solo_mode:
+            solo = await SoloFlow(self._session, self._settings, user_id, has_consent).handle(message)
+            if solo is not None:
+                return solo
 
         if message.intent in ("book", "services", "slots"):
             reply = await fallback.reply_by_intent(message.intent)
@@ -376,6 +388,9 @@ class DialogService:
                 ids = ", ".join(f"#{i}" for i in executor.created_booking_ids)
                 text = f"Запись {ids} создана и ждёт подтверждения администратора.\n\n{text}"
 
+        if self._settings.solo_mode:
+            text = await guard_prices(self._session, text)
+
         if executor.transfer_unavailable and not executor.transfer_requested:
             text = self._no_admins_text()
 
@@ -425,7 +440,8 @@ class DialogService:
         messages.append({"role": "user", "content": self._mask(user_content)})
 
         for _ in range(MAX_TOOL_ITERATIONS):
-            response = await self._openrouter.chat_completion(messages, tools=TOOL_DEFINITIONS)
+            tools = SOLO_TOOL_DEFINITIONS if self._settings.solo_mode else TOOL_DEFINITIONS
+            response = await self._openrouter.chat_completion(messages, tools=tools)
             assistant_msg = self._openrouter.extract_assistant_message(response)
 
             tool_calls = assistant_msg.get("tool_calls")
@@ -465,7 +481,7 @@ class DialogService:
         template = path.read_text(encoding="utf-8")
         now = executor.schedule.now()
         unknown = "уточняйте у администратора"
-        return template.format(
+        prompt = template.format(
             salon_name=self._settings.salon_name,
             salon_address=self._settings.salon_address or unknown,
             salon_phone=self._settings.salon_phone or unknown,
@@ -476,6 +492,7 @@ class DialogService:
             timezone=self._settings.timezone,
             phone_label=PHONE_LABEL,
         )
+        return prompt + SOLO_PROMPT if self._settings.solo_mode else prompt
 
     @staticmethod
     def _build_user_content(message: IncomingMessage) -> str:
