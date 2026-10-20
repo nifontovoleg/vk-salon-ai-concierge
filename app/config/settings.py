@@ -61,6 +61,11 @@ class Settings(BaseSettings):
         default=2.0, ge=0, description="Client can't cancel/reschedule online closer than this"
     )
 
+    solo_mode: bool = Field(
+        default=False,
+        description="Solo master: instant reply to new clients, prices only from DB, no master choice",
+    )
+
     require_consent: bool = Field(default=True, description="Ask PD consent before LLM dialog")
     privacy_policy_url: str = Field(default="", description="Link to personal data policy")
     mask_pii: bool = Field(default=True, description="Mask phones/emails in text sent to LLM")

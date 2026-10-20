@@ -117,3 +117,41 @@ def booking_admin_keyboard(booking_id: int) -> str:
         )
         .get_json()
     )
+
+
+def _label(text: str, limit: int = 40) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def solo_services_keyboard(services: list[tuple[int, str, int]]) -> str:
+    """Solo mode: inline service buttons «Название — цена ₽» (one per row, VK inline limit — 6 rows)."""
+    keyboard = Keyboard(inline=True)
+    for index, (service_id, name, price) in enumerate(services[:6]):
+        if index:
+            keyboard.row()
+        keyboard.add(
+            Text(_label(f"{name} — {price} ₽"), payload={"action": "solo_service", "service_id": service_id}),
+            color=KeyboardButtonColor.PRIMARY,
+        )
+    return keyboard.get_json()
+
+
+def solo_slots_keyboard(service_id: int, slots: list) -> str:
+    """Solo mode: inline free-time buttons for the chosen service (up to 8, two per row)."""
+    keyboard = Keyboard(inline=True)
+    for index, (day, start) in enumerate(slots[:8]):
+        if index and index % 2 == 0:
+            keyboard.row()
+        keyboard.add(
+            Text(
+                f"{day.strftime('%d.%m')} {start.strftime('%H:%M')}",
+                payload={
+                    "action": "solo_slot",
+                    "service_id": service_id,
+                    "date": day.isoformat(),
+                    "time": start.strftime("%H:%M"),
+                },
+            ),
+            color=KeyboardButtonColor.POSITIVE,
+        )
+    return keyboard.get_json()

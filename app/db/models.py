@@ -146,6 +146,18 @@ class DialogMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class SoloClient(Base):
+    """Solo mode: client already greeted + slot chosen by button, waiting for phone."""
+
+    __tablename__ = "solo_clients"
+
+    user_vk_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    greeted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    pending_service_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pending_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    pending_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+
+
 class ProcessedVkMessage(Base):
     """Tracks handled VK messages to prevent duplicate replies across bot instances."""
 
