@@ -73,7 +73,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "time": {"type": "string", "description": "Время HH:MM"},
                     "phone": {
                         "type": "string",
-                        "description": f"Телефон клиента; если в тексте он скрыт меткой {PHONE_LABEL}, передай её как есть",
+                        "description": (
+                            "Телефон клиента; если в тексте он скрыт меткой вроде [ТЕЛЕФОН_1] "
+                            f"или {PHONE_LABEL}, передай её как есть"
+                        ),
                     },
                     "master_name": {"type": "string", "description": "Имя мастера (необязательно)"},
                     "client_name": {"type": "string", "description": "Имя клиента (необязательно)"},

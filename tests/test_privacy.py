@@ -98,7 +98,7 @@ async def test_revoke_consent_deletes_history(full_session):
 
 async def test_llm_gets_masked_text_but_booking_has_real_phone(full_session):
     openrouter = _llm()
-    await _ask(full_session, openrouter, CLIENT_ID, "Мой телефон 8 999 123-45-67, почта o@x.ru")
+    await _ask(full_session, openrouter, CLIENT_ID, "Мой телефон 8 999 123-45-67, почта o@x.ru", anonymize_ai=False)
     sent = json.dumps(openrouter.chat_completion.await_args.args[0], ensure_ascii=False)
     assert "123-45-67" not in sent and "o@x.ru" not in sent and "[телефон]" in sent
 
@@ -108,7 +108,7 @@ async def test_llm_gets_masked_text_but_booking_has_real_phone(full_session):
         {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [call]}}]},
         {"choices": [{"message": {"role": "assistant", "content": "Готово"}}]},
     ]
-    await _ask(full_session, openrouter, CLIENT_ID, "Запишите на мужскую стрижку")
+    await _ask(full_session, openrouter, CLIENT_ID, "Запишите на мужскую стрижку", anonymize_ai=False)
     second_history = json.dumps(openrouter.chat_completion.await_args_list[-2].args[0], ensure_ascii=False)
     assert "123-45-67" not in second_history
     from app.repositories import BookingRepository
@@ -119,7 +119,7 @@ async def test_llm_gets_masked_text_but_booking_has_real_phone(full_session):
 
 async def test_mask_disabled_sends_raw(full_session):
     openrouter = _llm()
-    await _ask(full_session, openrouter, CLIENT_ID, "Мой телефон 8 999 123-45-67", mask_pii=False)
+    await _ask(full_session, openrouter, CLIENT_ID, "Мой телефон 8 999 123-45-67", mask_pii=False, anonymize_ai=False)
     sent = json.dumps(openrouter.chat_completion.await_args.args[0], ensure_ascii=False)
     assert "123-45-67" in sent
 

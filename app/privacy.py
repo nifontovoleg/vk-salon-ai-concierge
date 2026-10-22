@@ -48,6 +48,44 @@ def extract_phone(text: str) -> str | None:
     return "+" + digits
 
 
+class LlmPrivacy:
+    """Что уходит в модель и что возвращается клиенту — на один запрос к LLM.
+
+    * ``ANONYMIZE_AI=true`` (по умолчанию): полный обезличиватель
+      (``app.anonymizer``, порт JS-модуля Олега) — ФИО, телефоны, email, адреса,
+      документы, карты, счета, ИНН/ОГРН, даты рождения, логины заменяются
+      метками ``[ТЕЛЕФОН_1]``; ответ модели и аргументы инструментов
+      восстанавливаются по таблице меток.
+    * ``ANONYMIZE_AI=false``: прежнее поведение ``MASK_PII`` — только телефоны
+      и email меняются на ``[телефон]`` / ``[email]`` без восстановления.
+    """
+
+    def __init__(self, anonymize_ai: bool, mask: bool, known: list[dict] | None = None) -> None:
+        from app.anonymizer import PiiSession
+
+        self.enabled = anonymize_ai
+        self._legacy = mask and not anonymize_ai
+        self.session = PiiSession(known=list(known or []))
+
+    @classmethod
+    def from_settings(cls, settings, known_phone: str | None = None) -> "LlmPrivacy":
+        known = [{"type": "ТЕЛЕФОН", "value": known_phone}] if known_phone else []
+        return cls(
+            getattr(settings, "anonymize_ai", True), getattr(settings, "mask_pii", True), known
+        )
+
+    def mask(self, text: str) -> str:
+        if self.enabled:
+            return self.session.anonymize(text or "")
+        return mask_pii(text) if self._legacy else text
+
+    def restore(self, value):
+        """Метки → исходные данные (строка, список или dict аргументов)."""
+        if not self.enabled:
+            return value
+        return self.session.restore_obj(value)
+
+
 class PiiLogFilter(logging.Filter):
     """logging-фильтр: маскирует email и телефоны в любых записях лога."""
 

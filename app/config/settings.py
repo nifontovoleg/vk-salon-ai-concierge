@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     require_consent: bool = Field(default=True, description="Ask PD consent before LLM dialog")
     privacy_policy_url: str = Field(default="", description="Link to personal data policy")
     mask_pii: bool = Field(default=True, description="Mask phones/emails in text sent to LLM")
+    anonymize_ai: bool = Field(
+        default=True,
+        description="Replace all detected PII with tokens like [ТЕЛЕФОН_1] before LLM and restore in replies",
+    )
 
     dialog_history_limit: int = Field(default=20, ge=1, le=100)
     openrouter_timeout: float = Field(default=60.0, ge=5.0)
