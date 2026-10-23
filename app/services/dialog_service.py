@@ -19,7 +19,7 @@ from app.keyboards import (
     my_bookings_keyboard,
     reschedule_keyboard,
 )
-from app.privacy import PHONE_LABEL, extract_phone, mask_pii
+from app.privacy import PHONE_LABEL, LlmPrivacy, extract_phone
 from app.repositories import ConsentRepository, DialogRepository
 from app.schemas.message import (
     AttachmentType,
@@ -301,7 +301,8 @@ class DialogService:
         return (
             "Чтобы ответить на сообщение в свободной форме и записать вас через чат, "
             "текст переписки передаётся AI-сервису (OpenRouter, серверы за пределами РФ). "
-            "Телефоны и email перед отправкой скрываются, переписка хранится в базе салона.\n"
+            "Перед отправкой в ИИ-модель персональные данные заменяются обезличенными метками, "
+            "переписка хранится в базе салона.\n"
             f"{policy}\n\n"
             "Нажмите «Согласен» или напишите «согласен». Без согласия работают кнопки "
             "«Услуги и цены», «Свободное время» и «Администратор»."
@@ -379,7 +380,8 @@ class DialogService:
             self._session, user_id, settings=self._settings, known_phone=known_phone
         )
         try:
-            result = await self._generate_reply(history, user_content, executor)
+            privacy = LlmPrivacy.from_settings(self._settings, known_phone)
+            result = await self._generate_reply(history, user_content, executor, privacy)
             text = result.text
         except Exception as exc:  # LLM недоступен, битый ответ, ошибка инструмента
             logger.error("LLM dialog failed for user %s: %s", user_id, exc, exc_info=True)
@@ -424,20 +426,28 @@ class DialogService:
             "«Записаться», «Услуги и цены», «Свободное время», «Администратор»."
         )
 
-    def _mask(self, text: str) -> str:
-        return mask_pii(text) if self._settings.mask_pii else text
-
     async def _generate_reply(
-        self, history: list, user_content: str, executor: ToolExecutor
+        self,
+        history: list,
+        user_content: str,
+        executor: ToolExecutor,
+        privacy: LlmPrivacy | None = None,
     ) -> _GenerationResult:
-        """Call OpenRouter with history and tools, return final text."""
+        """Call OpenRouter with history and tools, return final text.
+
+        Всё, что уходит в модель (история, текст клиента, результаты инструментов),
+        проходит через privacy.mask; аргументы инструментов и итоговый текст —
+        через privacy.restore, поэтому в базу и клиенту попадают настоящие данные.
+        """
+        privacy = privacy or LlmPrivacy.from_settings(self._settings)
         messages: list[dict] = [{"role": "system", "content": self._load_system_prompt(executor)}]
         for msg in history[:-1]:
             if msg.role == MessageRole.USER:
-                messages.append({"role": "user", "content": self._mask(msg.content)})
+                messages.append({"role": "user", "content": privacy.mask(msg.content)})
             elif msg.role == MessageRole.ASSISTANT:
-                messages.append({"role": "assistant", "content": msg.content})
-        messages.append({"role": "user", "content": self._mask(user_content)})
+                content = privacy.mask(msg.content) if privacy.enabled else msg.content
+                messages.append({"role": "assistant", "content": content})
+        messages.append({"role": "user", "content": privacy.mask(user_content)})
 
         for _ in range(MAX_TOOL_ITERATIONS):
             tools = SOLO_TOOL_DEFINITIONS if self._settings.solo_mode else TOOL_DEFINITIONS
@@ -446,7 +456,7 @@ class DialogService:
 
             tool_calls = assistant_msg.get("tool_calls")
             if not tool_calls:
-                content = assistant_msg.get("content") or ""
+                content = privacy.restore(assistant_msg.get("content") or "")
                 return _GenerationResult(text=content.strip() or "Извините, не удалось сформировать ответ.")
 
             messages.append(assistant_msg)
@@ -461,15 +471,16 @@ class DialogService:
                         ensure_ascii=False,
                     )
                 else:
-                    result = await executor.execute(str(fn.get("name")), args)
+                    # Метки в аргументах ([ТЕЛЕФОН_1], [ИМЯ_1]) → настоящие данные до записи в базу.
+                    result = await executor.execute(str(fn.get("name")), privacy.restore(args))
                 messages.append(
-                    {"role": "tool", "tool_call_id": tool_call.get("id", ""), "content": result}
+                    {"role": "tool", "tool_call_id": tool_call.get("id", ""), "content": privacy.mask(result)}
                 )
 
             if executor.transfer_requested or executor.transfer_unavailable:
                 final = await self._openrouter.chat_completion(messages)
                 assistant_msg = self._openrouter.extract_assistant_message(final)
-                text = (assistant_msg.get("content") or "Передаю ваш запрос администратору.").strip()
+                text = privacy.restore(assistant_msg.get("content") or "Передаю ваш запрос администратору.").strip()
                 return _GenerationResult(text=text)
 
         return _GenerationResult(
